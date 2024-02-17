@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+//#define EML_TREES_REGRESSION_ENABLE 0
 #include "xor_model.h"
 
 void xor_test(void)
@@ -29,7 +30,7 @@ void xor_test(void)
         const float *features = test_inputs[i];
         const int out = xor_model_predict(features, 2);
 
-        printf("xor(%.2f, %.2f) = %d\n", features[0], features[1], out);
+        printf("xor(%d,%d) = %d\n", (int)features[0], (int)features[1], out);
     }
 }
 
