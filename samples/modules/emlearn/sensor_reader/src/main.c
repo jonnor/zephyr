@@ -11,6 +11,7 @@
 #include <zephyr/sys/util.h>
 
 #include "sensor_reader.h"
+#include "preprocessing.h"
 
 // Configuration
 #define SAMPLERATE 104
@@ -67,82 +68,6 @@ setup_sensor(const struct device *const lsm6dsl_dev)
     return 0;
 }
 
-enum accelgyro_feature {
-    accelgyro_feature_orientation_x,
-    accelgyro_feature_orientation_y,
-    accelgyro_feature_orientation_z,
-    accelgyro_feature_acceleration_mag_rms,
-    accelgyro_features_length;
-}
-//#define ACCELGYRO_PREPROCESSOR_FEATURES 6
-
-struct accelgyro_preprocessor {
-
-    float features[accelgyro_features_length]; // reused working-buffer
-
-};
-
-int
-accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
-                            const struct sensor_value *data,
-                            int length)
-{
-    // TODO: verify input dimensions
-
-    float orientation_x = 0.0;
-    float orientation_y = 0.0;
-    float orientation_z = 0.0;
-
-    float rms_x = 0.0;
-    float rms_y = 0.0;
-    float rms_z = 0.0;
-
-    float acc_mag_squared = 0.0f;
-
-    const int n_frames = length / N_CHANNELS;
-    for (int i=0; i<n_frames; i++) {
-        const int offset = i * N_CHANNELS;
-
-        // NOTE: order must match the defined in sensor readout
-        const float acc_x = sensor_value_to_double(data[offset+0]);
-        const float acc_y = sensor_value_to_double(data[offset+1]);
-        const float acc_z = sensor_value_to_double(data[offset+2]);
-
-        const float gyro_x = sensor_value_to_double(data[offset+3]);
-        const float gyro_y = sensor_value_to_double(data[offset+4]);
-        const float gyro_z = sensor_value_to_double(data[offset+5]);
-
-        // Compute features
-        const float acc_mag = (acc_x*acc_x) + (acc_y*acc_y) + (acc_z*acc_z);
-        acc_mag_squared += (acc_mag*acc_mag);
-
-        // TODO: do sensor-fusion with gyro data. Complimentary filter or Kalman
-        orientation_x += acc_x;
-        orientation_y += acc_y;
-        orientation_z += acc_z;
-    }
-
-    // TODO: normalize the orientation vector
-    orientation_x /= n_frames;
-    orientation_z /= n_frames;
-    orientation_y /= n_frames;
-    features[accelgyro_feature_orientation_x] = orientation_x;
-    features[accelgyro_feature_orientation_y] = orientation_y;
-    features[accelgyro_feature_orientation_z] = orientation_z;
-
-    const float acc_rms_mag = sqrtf(acc_mag_squared / n_frames);
-    features[accelgyro_feature_acceleration_mag_rms] = acc_rms_mag;
-}
-
-void
-process(const struct sensor_value *data, int length)
-{    
-    printk("process-chunk length=%d \n", length);
-    accelgyro_preprocessor_run(data, length);
-
-
-
-}
 
 int main(void) {
 
@@ -171,8 +96,7 @@ int main(void) {
         .put_errors = 0
     };
 
-    struct accelgyro_preprocessor preprocessor = {
-    };
+    struct accelgyro_preprocessor preprocessor;
 
 
     if (!device_is_ready(lsm6dsl_dev)) {
@@ -193,7 +117,10 @@ int main(void) {
         // check for new data
         const int get_status = k_msgq_get(reader.queue, &chunk, K_NO_WAIT);
         if (get_status != 0) {
-            process(chunk.buffer, chunk.length);
+
+            printk("process-chunk length=%d \n", chunk.length);
+            accelgyro_preprocessor_run(&preprocessor, chunk.buffer, chunk.length);
+
         }
 
         printk("main-loop-iter iteration=%d \n", iteration);
