@@ -1,35 +1,12 @@
 
-
-#define EML_CSV_VALUES_LENGTH 100
-#define EML_CSV_BUFFER_LENGTH 1024
-
-#include <eml_test.h> // from emlearn, for CSV reader
-#include "eml_csv.h" // WIP, should go into emlearn. For CSV writer
+// from emlearn, for CSV reader/writer
+#include <eml_csv.h>
+#include <eml_fileio.h>
 
 #include "preprocessing.h"
 
-
-// TODO: put somewhere generic
-int eml_io_file_write(void *context, const uint8_t *buffer, size_t size)
-{
-    FILE* fptr = context;
-    return fwrite(buffer, 1, size, fptr);
-}
-
-int eml_io_file_read(void *context, uint8_t *buffer, size_t size)
-{
-    FILE* fptr = context;
-    return fread(buffer, 1, size, fptr);
-}
-
-int eml_io_file_seek(void *context, size_t position)
-{
-    FILE* fptr = context;
-    return fseek(fptr, position, SEEK_SET);
-}
-
-#define N_DATA_COLUMNS 7
-const char *columns[] = {
+// Input format
+const char *expect_columns[7] = {
     "time",
     "acc_x",
     "acc_y",
@@ -38,66 +15,121 @@ const char *columns[] = {
     "gyro_y",
     "gyro_z",
 };
+#define INPUT_COLUMNS_MAX 10
+char *input_columns[INPUT_COLUMNS_MAX];
+float input_values[INPUT_COLUMNS_MAX];
 
+// Output format
+#define OUTPUT_COLUMNS_LENGTH (accelgyro_features_length+1)
+const char *output_columns[OUTPUT_COLUMNS_LENGTH] = {
+    "time",
+    "orientation_x",
+    "orientation_y",
+    "orientation_z",
+    "acceleration_mag_rms"
+};
+float output_values[OUTPUT_COLUMNS_LENGTH];
+
+// Working buffers
 #define READ_BUFFER_SIZE 1024
 char read_buffer[READ_BUFFER_SIZE];
+
 
 int
 main(int argc, const char *argv)
 {
-    
-    // Write some simple file
-    FILE *write_file = fopen("test.csv", "w");
+ 
+    // Setup file input and output
+    FILE *read_file = fopen("sensordata.csv", "r");
+    if (read_file == NULL) {
+        fprintf(stderr, "failed to open input\n");
+        return 1;
+    }
+    FILE *write_file = fopen("features.csv", "w");
+    if (write_file == NULL) {
+        fprintf(stderr, "failed to open output\n");
+        return 1;
+    }
+
+    EmlCsvReader _reader = {
+        .seek = eml_fileio_seek,
+        .read = eml_fileio_read,
+        .stream = read_file,
+    };
+    EmlCsvReader *reader = &_reader;
     
     EmlCsvWriter _writer = {
-        .n_columns = N_DATA_COLUMNS,
-        .write = eml_io_file_write,
+        .n_columns = OUTPUT_COLUMNS_LENGTH,
+        .write = eml_fileio_write,
         .stream = write_file,
     };
     EmlCsvWriter *writer = &_writer;
 
-    EmlError header_err = eml_csv_writer_write_header(writer, columns, N_DATA_COLUMNS);
+    const EmlError write_header_err = \
+        eml_csv_writer_write_header(writer, output_columns, OUTPUT_COLUMNS_LENGTH);
+    if (write_header_err != EmlOk) {
+        fprintf(stderr, "header-write-fail error=%d \n", write_header_err);
+        return 1;
+    }
 
-    const float values[N_DATA_COLUMNS] = \
-        { 0.0f, 1.1f, 2.2f, 3.3f, 4.4f, 5.5f, 6.6f };
+    // Check input header is as expected
+    const EmlError read_header_err = eml_csv_reader_read_header(reader,\
+        read_buffer, READ_BUFFER_SIZE, input_columns, INPUT_COLUMNS_MAX);
 
-    EmlError write_err = eml_csv_writer_write_data(writer, values, N_DATA_COLUMNS);
-    write_err = eml_csv_writer_write_data(writer, values, N_DATA_COLUMNS);
 
-    printf("write-done header=%d write=%d \n", header_err, write_err);
+
+    for (int i=0; i<reader->n_columns; i++) {
+        const bool correct = strcmp(input_columns[i], expect_columns[i]) == 0;
+        if (!correct) {
+            fprintf(stderr, "incorrect-sensordata-column index=%d got=%s expect=%s\n",
+                i, input_columns[i], expect_columns[i]);
+            return 1;
+        }
+    }
+
+    // Setup preprocessing
+    struct accelgyro_preprocessor preprocessor;
+
+    // Read and process data
+    const int max_rows = 10000;
+    int row = -1;
+    for (row=0; row<max_rows; row++) {
+        const int values_read = eml_csv_reader_read_data(reader,\
+            read_buffer, READ_BUFFER_SIZE, input_columns, INPUT_COLUMNS_MAX);
+        if (values_read == 0) {
+            // finished
+            break;
+        }
+
+        // Parse as numbers
+        for (int i=0; i<reader->n_columns; i++) {
+            const float v = strtod(input_columns[i], NULL);
+            input_values[i] = v;
+        }
+
+        // FIXME: need to batch up N rows of sensor data
+        // Run through preprocessor
+        const float *sensor_data = input_values+1; // first column is time, ignored
+        accelgyro_preprocessor_run(&preprocessor, sensor_data, accelgyro_features_length);
+
+        output_values[0] = 666.66f; // FIXME: set meaningful time value
+        for (int i=0; i<accelgyro_features_length; i++) {
+            output_values[i+1] = preprocessor.features[i];
+        }
+
+        // Write output values
+        const EmlError write_err = \
+            eml_csv_writer_write_data(writer, output_values, OUTPUT_COLUMNS_LENGTH);
+        if (write_err != EmlOk) {
+            fprintf(stderr, "failed to write output\n");
+            return 2;
+        }
+    }
 
     fclose(write_file);
-    
+    fclose(read_file);
 
-    // Read back
-    FILE *read_file = fopen("test.csv", "r");
-    EmlCsvReader _reader = {
-        .seek = eml_io_file_seek,
-        .read = eml_io_file_read,
-        .stream = read_file,
-    };
-    EmlCsvReader *reader = &_reader;
-
-#define READ_COLUMNS_MAX 10
-    char *read_columns[READ_COLUMNS_MAX];
-
-    EmlError read_header_err = eml_csv_reader_read_header(reader,\
-        read_buffer, READ_BUFFER_SIZE, read_columns, READ_COLUMNS_MAX);
-
-    printf("header-status err=%d columms=%d\n", read_header_err, reader->n_columns);
-
-    printf("columns: \n");
-    for (int i=0; i<reader->n_columns; i++) {
-        printf("%s\n", read_columns[i]);
-    }
-
-    EmlError data_err = eml_csv_reader_read_data(reader,\
-        read_buffer, READ_BUFFER_SIZE, read_columns, READ_COLUMNS_MAX);
-    printf("data-status err=%d\n", data_err);
-    for (int i=0; i<reader->n_columns; i++) {
-        printf("%s\n", read_columns[i]);
-    }
-
+    printf("main-done rows=%d \n", row);
 
     return 0;
 }
