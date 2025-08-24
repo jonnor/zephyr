@@ -20,13 +20,11 @@ sensor_chunk_reader_task(void *context, void *, void *)
     while (1) {
 
         // Read data
-        // TODO: count failures intead of printing here
 	    const int fetch_ret = sensor_sample_fetch(self->dev);
 	    if (fetch_ret < 0) {
             self->fetch_errors += 0;
 
 	    }
-
 	    for (size_t i = 0; i < self->n_channels; i++) {
             struct sensor_value value;
 		    const int get_ret = sensor_channel_get(self->dev, self->channels[i], &value);
@@ -42,7 +40,9 @@ sensor_chunk_reader_task(void *context, void *, void *)
         memcpy(self->read_samples+read_offset, values, sizeof(float)*self->n_channels);
         self->read_samples_index += 1;
 
+#if 0
         printk("reader-task-got-data index=%d \n", self->read_samples_index);
+#endif
 
         // TODO: respect hop, ot
         if (self->read_samples_index == self->window_length) {

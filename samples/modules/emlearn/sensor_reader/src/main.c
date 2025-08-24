@@ -30,8 +30,8 @@ enum sensor_channel sensor_reader_channels[N_CHANNELS] = {
 
 
 // Reader internals
-struct sensor_value sensor_reader_output_buffer[WINDOW_LENGTH*N_CHANNELS];
-struct sensor_value sensor_reader_new_buffer[HOP_LENGTH*N_CHANNELS];
+float sensor_reader_output_buffer[WINDOW_LENGTH*N_CHANNELS];
+float sensor_reader_new_buffer[HOP_LENGTH*N_CHANNELS];
 
 #define SENSOR_READER_STACK_SIZE 1000
 K_THREAD_STACK_DEFINE(sensor_reader_stack, SENSOR_READER_STACK_SIZE);
@@ -98,6 +98,8 @@ int main(void) {
 
     struct accelgyro_preprocessor preprocessor;
 
+    accelgyro_preprocessor_init(&preprocessor);
+    accelgyro_preprocessor_set_gravity_lowpass(&preprocessor, 0.5f, SAMPLERATE);
 
     if (!device_is_ready(lsm6dsl_dev)) {
         printk("sensor: device %s not ready.\n", lsm6dsl_dev->name);
@@ -107,26 +109,39 @@ int main(void) {
     // Setup sensor
     setup_sensor(lsm6dsl_dev);
 
-
     // Start high-priority thread for collecting data
     sensor_chunk_reader_start(&reader);
 
     int iteration = 0;
     while (1) {
+        const float uptime = k_uptime_get() / 1000.0;
 
         // check for new data
         const int get_status = k_msgq_get(reader.queue, &chunk, K_NO_WAIT);
         if (get_status != 0) {
 
-            printk("process-chunk length=%d \n", chunk.length);
-            accelgyro_preprocessor_run(&preprocessor, chunk.buffer, chunk.length);
+            //printk("process-chunk length=%d \n", chunk.length);
+            const int run_status = \
+                accelgyro_preprocessor_run(&preprocessor, chunk.buffer, chunk.length);
 
+            printk("features err=%d time=%.3f | ", run_status, (double)uptime);
+            const int n_features = accelgyro_features_length;
+            for (int i=0; i<n_features; i++) {
+                printk("%.4f ", (double)preprocessor.features[i]);
+            }
+            printk("\n");
+
+            const float *gravity = preprocessor.gravity;
+            printk("gravity %.2f %.2f %.2f \n",
+                (double)gravity[0], (double)gravity[1], (double)gravity[2]);
+
+            // TODO: run through ML model, print outputs
         }
 
         printk("main-loop-iter iteration=%d \n", iteration);
 
         iteration += 1;
-	    k_msleep(200);
+	    k_msleep(100);
     }
 
     return 0;
