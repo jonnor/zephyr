@@ -14,7 +14,7 @@ sensor_chunk_reader_task(void *context, void *, void *)
 
     // TODO: verify that sensor is setup. Check ready?
 
-    struct sensor_value values[SENSOR_CHUNK_READER_MAX_CHANNELS];
+    float values[SENSOR_CHUNK_READER_MAX_CHANNELS];
 
     // MAYBE: support a way of exiting loop gracefully?
     while (1) {
@@ -28,7 +28,10 @@ sensor_chunk_reader_task(void *context, void *, void *)
 	    }
 
 	    for (size_t i = 0; i < self->n_channels; i++) {
-		    const int get_ret = sensor_channel_get(self->dev, self->channels[i], &values[i]);
+            struct sensor_value value;
+		    const int get_ret = sensor_channel_get(self->dev, self->channels[i], &value);
+            values[i] = sensor_value_to_double(&value);
+
 		    if (get_ret < 0) {
                 self->get_errors += 1;
 		    }
@@ -36,16 +39,15 @@ sensor_chunk_reader_task(void *context, void *, void *)
 
         // Buffer received data
         const int read_offset = (self->read_samples_index*self->n_channels);
-        memcpy(self->read_samples+read_offset, values, sizeof(struct sensor_value)*self->n_channels);
+        memcpy(self->read_samples+read_offset, values, sizeof(float)*self->n_channels);
         self->read_samples_index += 1;
 
         printk("reader-task-got-data index=%d \n", self->read_samples_index);
 
-#if 1
         // TODO: respect hop, ot
         if (self->read_samples_index == self->window_length) {
             // Push onto output buffer
-            memcpy(self->read_samples, values, sizeof(struct sensor_value)*self->n_channels);
+            memcpy(self->read_samples, values, sizeof(float)*self->n_channels);
             self->read_samples_index = 0;
 
             // Check if output buffer is full
@@ -60,9 +62,7 @@ sensor_chunk_reader_task(void *context, void *, void *)
                 }
             }
         }
-#endif
 
-        // FIXME: calculate from sampling rate
         const int wait_timeout_us = 1000000/self->samplerate;
         k_usleep(wait_timeout_us);
     }

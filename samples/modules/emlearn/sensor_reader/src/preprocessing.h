@@ -19,7 +19,7 @@ struct accelgyro_preprocessor {
 // TODO: support gravity separation
 int
 accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
-                            const struct sensor_value *data,
+                            const float *data,
                             int length)
 {
     // TODO: verify input dimensions
@@ -41,15 +41,15 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
         const int offset = i * ACCELGYRO_INPUT_CHANNELS;
 
         // NOTE: order must match the defined in sensor readout
-        const float acc_x = sensor_value_to_double(&data[offset+0]);
-        const float acc_y = sensor_value_to_double(&data[offset+1]);
-        const float acc_z = sensor_value_to_double(&data[offset+2]);
+        const float acc_x = data[offset+0];
+        const float acc_y = data[offset+1];
+        const float acc_z = data[offset+2];
 
         // TODO: utilize gyro data
 #if 0
-        const float gyro_x = sensor_value_to_double(&data[offset+3]);
-        const float gyro_y = sensor_value_to_double(&data[offset+4]);
-        const float gyro_z = sensor_value_to_double(&data[offset+5]);
+        const float gyro_x = data[offset+3];
+        const float gyro_y = data[offset+4];
+        const float gyro_z = data[offset+5];
 #endif
 
         // Compute features
