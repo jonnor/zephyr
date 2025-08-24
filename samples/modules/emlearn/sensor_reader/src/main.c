@@ -16,7 +16,7 @@
 // Configuration
 #define SAMPLERATE 104
 #define WINDOW_LENGTH 100
-#define HOP_LENGTH 25
+#define HOP_LENGTH 50
 
 #define N_CHANNELS 6
 enum sensor_channel sensor_reader_channels[N_CHANNELS] = {
@@ -113,18 +113,20 @@ int main(void) {
     sensor_chunk_reader_start(&reader);
 
     int iteration = 0;
+    float previous_input = 0.0f;
     while (1) {
         const float uptime = k_uptime_get() / 1000.0;
 
         // check for new data
-        const int get_status = k_msgq_get(reader.queue, &chunk, K_NO_WAIT);
-        if (get_status != 0) {
+        const int get_error = k_msgq_get(reader.queue, &chunk, K_NO_WAIT);
+        if (get_error == 0) {
 
             //printk("process-chunk length=%d \n", chunk.length);
             const int run_status = \
                 accelgyro_preprocessor_run(&preprocessor, chunk.buffer, chunk.length);
 
-            printk("features err=%d time=%.3f | ", run_status, (double)uptime);
+            const float dt = uptime - previous_input;
+            printk("features err=%d l=%d dt=%.3f time=%.3f | ", run_status, chunk.length, (double)dt, (double)uptime);
             const int n_features = accelgyro_features_length;
             for (int i=0; i<n_features; i++) {
                 printk("%.4f ", (double)preprocessor.features[i]);
@@ -136,9 +138,12 @@ int main(void) {
                 (double)gravity[0], (double)gravity[1], (double)gravity[2]);
 
             // TODO: run through ML model, print outputs
+            previous_input = uptime;
         }
 
+#if 0
         printk("main-loop-iter iteration=%d \n", iteration);
+#endif
 
         iteration += 1;
 	    k_msleep(100);

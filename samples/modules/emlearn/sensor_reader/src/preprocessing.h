@@ -109,7 +109,7 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
         const float motion_z = self->motion[2];
 
         // magnitude squared for rms
-        const float motion_mag = (motion_x*motion_x) + (motion_y*motion_y) + (motion_z*motion_z);
+        const float motion_mag = sqrtf((motion_x*motion_x) + (motion_y*motion_y) + (motion_z*motion_z));
         motion_mag_squared += (motion_mag*motion_mag);
 
         // motion min/max for p2p
@@ -133,7 +133,7 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
     // Orientation vector
     // Is the gravity vector estimate, normalized to 1.0 magitude
     const float *gv = self->gravity;
-    const float gravity_mag = (gv[0]*gv[0]) + (gv[1]*gv[1]) + (gv[2]*gv[2]);
+    const float gravity_mag = sqrtf((gv[0]*gv[0]) + (gv[1]*gv[1]) + (gv[2]*gv[2]));
     features[accelgyro_feature_orientation_x] = self->gravity[0] / gravity_mag;
     features[accelgyro_feature_orientation_y] = self->gravity[1] / gravity_mag;
     features[accelgyro_feature_orientation_z] = self->gravity[2] / gravity_mag;

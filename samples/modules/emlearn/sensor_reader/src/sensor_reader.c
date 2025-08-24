@@ -11,9 +11,6 @@ static void
 sensor_chunk_reader_task(void *context, void *, void *)
 {
     struct sensor_chunk_reader * self = (struct sensor_chunk_reader *)context;
-
-    // TODO: verify that sensor is setup. Check ready?
-
     float values[SENSOR_CHUNK_READER_MAX_CHANNELS];
 
     // MAYBE: support a way of exiting loop gracefully?
@@ -56,6 +53,9 @@ sensor_chunk_reader_task(void *context, void *, void *)
                 const int out_length = self->n_channels * self->window_length;
                 struct sensor_chunk_msg msg = { 1, self->output_buffer, out_length };
 
+#if 0
+        printk("reader-task-got-data index=%d \n", self->read_samples_index);
+#endif
 	            const int put_status = k_msgq_put(self->queue, &msg, K_NO_WAIT);
                 if (put_status < 0) {
                     self->put_errors += 1;
