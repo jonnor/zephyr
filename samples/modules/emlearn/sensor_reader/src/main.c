@@ -17,11 +17,14 @@
 #define WINDOW_LENGTH 100
 #define HOP_LENGTH 25
 
-#define N_CHANNELS 3
+#define N_CHANNELS 6
 enum sensor_channel sensor_reader_channels[N_CHANNELS] = {
 	SENSOR_CHAN_ACCEL_X,
 	SENSOR_CHAN_ACCEL_Y,
 	SENSOR_CHAN_ACCEL_Z,
+	SENSOR_CHAN_GYRO_X,
+	SENSOR_CHAN_GYRO_Y,
+	SENSOR_CHAN_GYRO_Z,
 };
 
 
