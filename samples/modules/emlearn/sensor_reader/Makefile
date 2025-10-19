@@ -10,6 +10,7 @@ test_processing:
 	./preprocess sensordata.csv features.csv 50
 
 test_model:
+	python convert_model.py
 	gcc -o process_model tools/process.c -I ${EMLEARN_INCLUDE_DIR} -I./src/ -lm -D MOTION_MODEL_FILE=\"motion_model.h\"
 	./process_model sensordata.csv output.csv 50
 
