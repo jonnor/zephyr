@@ -7,8 +7,15 @@
 
 #include "preprocessing.h"
 
-// Input format
+// Model
+// -DMOTION_MODEL_FILE=\"motion_model_config\"
+// NOTE: the model name should be "motion_model", so that motion_model_predict() works
+#ifdef MOTION_MODEL_FILE
+#include MOTION_MODEL_FILE
+#endif
+#define MOTION_MODEL_CLASSES 2
 
+// Input format
 #define SENSOR_DATA_COLUMNS 6
 
 const char *expect_columns[7] = {
@@ -26,7 +33,7 @@ float input_values[INPUT_COLUMNS_MAX];
 
 // Output format
 // Add +1 because we also have time column
-#define OUTPUT_COLUMNS_LENGTH (accelgyro_features_length+1)
+#define OUTPUT_COLUMNS_LENGTH (accelgyro_features_length+1+MOTION_MODEL_CLASSES)
 // WARNING: length of items must match the number of features defined
 const char *output_columns[OUTPUT_COLUMNS_LENGTH] = {
     "time",
@@ -37,7 +44,9 @@ const char *output_columns[OUTPUT_COLUMNS_LENGTH] = {
     "motion_mag_p2p",
     "motion_x_rms",
     "motion_y_rms",
-    "motion_z_rms"
+    "motion_z_rms",
+    "class_0",
+    "class_1"
 };
 float output_values[OUTPUT_COLUMNS_LENGTH];
 
@@ -237,6 +246,13 @@ main(int argc, const char *argv[])
     // Setup preprocessing
     struct accelgyro_preprocessor preprocessor;
 
+    // Setup model
+    float model_predictions[MOTION_MODEL_CLASSES];
+    for (int i=0; i<MOTION_MODEL_CLASSES; i++) {
+        // default to negative values, indicating no-output
+        model_predictions[i] = -1.0f;
+    }
+
     // Processing loop
     int window_no = 0;
     int window_read_index = 0;
@@ -267,6 +283,20 @@ main(int argc, const char *argv[])
             // Provide extracted features as output
             for (int i=0; i<accelgyro_features_length; i++) {
                 output_values[i+1] = preprocessor.features[i];
+            }
+
+            // Run through classifier (if enabled)
+#ifdef MOTION_MODEL_FILE
+            int model_err = motion_model_predict_proba(preprocessor.features, accelgyro_features_length, model_predictions, MOTION_MODEL_CLASSES);
+            if (model_err != 0) {
+                fprintf(stderr, "failed to run model %d\n", model_err);
+                return -4;
+            }
+#endif
+
+            // Provide model predictions as output
+            for (int i=0; i<MOTION_MODEL_CLASSES; i++) {
+                output_values[i+1+accelgyro_features_length] = model_predictions[i];
             }
 
             // Write output values to file
