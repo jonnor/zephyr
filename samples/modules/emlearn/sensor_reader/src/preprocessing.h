@@ -1,9 +1,15 @@
 
 #include <math.h>
+#include <eml_iir.h>
 
 #define ACCELGYRO_INPUT_CHANNELS 6
 
-// TODO: add motion_mag_p2p
+// IIR filters are biquads, to 2 stages -> 4th order
+#define ACCELGYRO_GRAVITY_FILTER_STAGES 2
+#define ACCELGYRO_GRAVITY_FILTER_COEFFICIENTS (ACCELGYRO_GRAVITY_FILTER_STAGES*6)
+#define ACCELGYRO_GRAVITY_FILTER_STATES (ACCELGYRO_GRAVITY_FILTER_STAGES*3*4)
+
+
 enum accelgyro_feature {
     accelgyro_feature_orientation_x = 0,
     accelgyro_feature_orientation_y,
@@ -18,8 +24,6 @@ enum accelgyro_feature {
 //#define ACCELGYRO_PREPROCESSOR_FEATURES 6
 
 struct accelgyro_preprocessor {
-    // configuration
-    float lowpass_alpha;
 
     // output buffer
     float features[accelgyro_features_length];
@@ -29,24 +33,57 @@ struct accelgyro_preprocessor {
     float gravity[3];
 
     int32_t frames_processed;
+
+    // IIR filter for gravity separation
+    // Multiple filters and associated states in XYZ order
+    // Coefficients are shared, same for X,Y,Z
+    EmlIIR gravity_filters[3];
+    float gravity_coefficients[ACCELGYRO_GRAVITY_FILTER_COEFFICIENTS];
+    float gravity_states[ACCELGYRO_GRAVITY_FILTER_STATES];
+    bool gravity_filter_enable;
 };
 
-void
+int
 accelgyro_preprocessor_init(struct accelgyro_preprocessor *self)
 {
     self->frames_processed = 0;
+
+    // Gravity separation
+    self->gravity_filter_enable = false;
+
+    for (int i=0; i<3; i++) {
+        self->gravity_filters[i] = (EmlIIR){
+            ACCELGYRO_GRAVITY_FILTER_STAGES,
+            self->gravity_states + i * ACCELGYRO_GRAVITY_FILTER_STATES,
+            ACCELGYRO_GRAVITY_FILTER_STATES,
+            self->gravity_coefficients + i*ACCELGYRO_GRAVITY_FILTER_COEFFICIENTS,
+            ACCELGYRO_GRAVITY_FILTER_COEFFICIENTS,
+        };
+
+        const EmlError filter_err = eml_iir_check(self->gravity_filters[i]);
+        if (filter_err != EmlOk) {
+            return -1;
+        }
+
+    }
+    for (int i=0; i<ACCELGYRO_GRAVITY_FILTER_STATES; i++) {
+        self->gravity_states[i] = 0.0f;
+    }
+
+    return 0;
 }
 
+// coeff must be for a 4th-order IIR filter, on EmlIIR format
 int
-accelgyro_preprocessor_set_gravity_lowpass(struct accelgyro_preprocessor *self, float cutoff, int samplerate)
+accelgyro_preprocessor_set_gravity_lowpass(struct accelgyro_preprocessor *self,
+        const float *coeff, int n_coefficients)
 {
-    if (cutoff >= samplerate/2.0f) {
+    if (n_coefficients != ACCELGYRO_GRAVITY_FILTER_COEFFICIENTS) {
         return -1;
     }
 
-    const float rc = 1.0f/(2.0f*3.14f*cutoff);
-    const float dt = 1.0f/samplerate;
-    self->lowpass_alpha = rc / (rc + dt);
+    memcpy(self->gravity_coefficients, coeff, n_coefficients*sizeof(float));
+    self->gravity_filter_enable = true;
 
     return 0;
 }
@@ -75,33 +112,32 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
     }
 
     const int n_frames = length / ACCELGYRO_INPUT_CHANNELS;
-    for (int i=0; i<n_frames; i++) {
-        const int offset = i * ACCELGYRO_INPUT_CHANNELS;
+    for (int frame=0; frame<n_frames; frame++) {
 
         // NOTE: accelerometer XYZ must be first 3 components
+        const int offset = frame * ACCELGYRO_INPUT_CHANNELS;
         const float *xyz = data+offset;
 
-        // Gravity vector separation using low-pass
+        // NOTE: gyro data currently ignored
         // TODO: do sensor-fusion with gyro, and use complimentary filter for gravity separation
+
+        // Gravity vector separation using low-pass
         if (self->frames_processed == 0) {
-
-            // initialize with current, to avoid gradual rampin from 0 from lowpass
-            self->gravity[0] = xyz[0];
-            self->gravity[1] = xyz[1];
-            self->gravity[2] = xyz[2];
-
-            self->motion[0] = 0.0;
-            self->motion[1] = 0.0;
-            self->motion[2] = 0.0;
-
-        } else {
-            // Estimate gravity with low-pass,
-            // and subtract it to estimate linear acceleration / "motion"
-            const float a = self->lowpass_alpha;
+            // warm up the low-pass filter
+            // avoids slow ramp-in from startup 0 to the near-DC values
+            const int initialization_repetitions = 10;
             for (int i=0; i<3; i++) {
-                self->gravity[i] = (a * self->gravity[i]) + ((1.0f - a) * xyz[i]);
-                self->motion[i] = xyz[i] - self->gravity[i];
+                for (int r=0; r<initialization_repetitions; r++) {
+                    eml_iir_filter(self->gravity_filters[i], xyz[i]);
+                }
             }
+        }
+
+        // Estimate gravity with low-pass,
+        // and subtract gravity to estimate linear acceleration / "motion"
+        for (int i=0; i<3; i++) {
+            self->gravity[i] = eml_iir_filter(self->gravity_filters[i], xyz[i]);
+            self->motion[i] = xyz[i] - self->gravity[i];
         }
 
         const float motion_x = self->motion[0];

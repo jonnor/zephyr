@@ -6,6 +6,7 @@
 #include <errno.h>
 
 #include "preprocessing.h"
+#include "gravity_filter.h"
 
 // Model
 // -DMOTION_MODEL_FILE=\"motion_model_config\"
@@ -244,7 +245,15 @@ main(int argc, const char *argv[])
     const int window_buffer_length = window_length*SENSOR_DATA_COLUMNS;
 
     // Setup preprocessing
-    struct accelgyro_preprocessor preprocessor;
+    struct accelgyro_preprocessor _preprocessor;
+    struct accelgyro_preprocessor *preprocessor = &_preprocessor;
+
+    const int gravity_err = accelgyro_preprocessor_set_gravity_lowpass(preprocessor,
+        gravity_lowpass_values, gravity_lowpass_length);
+    if (gravity_err != 0) {
+        return -2;
+    }
+
 
     // Setup model
     float model_predictions[MOTION_MODEL_CLASSES];
@@ -270,7 +279,7 @@ main(int argc, const char *argv[])
             window_no += 1;
 
             const int preprocess_err = \
-                accelgyro_preprocessor_run(&preprocessor, window_buffer, window_buffer_length);
+                accelgyro_preprocessor_run(preprocessor, window_buffer, window_buffer_length);
             if (preprocess_err != 0) {
                 fprintf(stderr, "preprocessor error %d\n", preprocess_err);
                 return -3;
@@ -282,12 +291,12 @@ main(int argc, const char *argv[])
 
             // Provide extracted features as output
             for (int i=0; i<accelgyro_features_length; i++) {
-                output_values[i+1] = preprocessor.features[i];
+                output_values[i+1] = preprocessor->features[i];
             }
 
             // Run through classifier (if enabled)
 #ifdef MOTION_MODEL_FILE
-            int model_err = motion_model_predict_proba(preprocessor.features, accelgyro_features_length, model_predictions, MOTION_MODEL_CLASSES);
+            int model_err = motion_model_predict_proba(preprocessor->features, accelgyro_features_length, model_predictions, MOTION_MODEL_CLASSES);
             if (model_err != 0) {
                 fprintf(stderr, "failed to run model %d\n", model_err);
                 return -4;
