@@ -1,13 +1,19 @@
 
 #include <math.h>
 #include <eml_iir.h>
+#include <eml_fft.h>
 
 #define ACCELGYRO_INPUT_CHANNELS 6
 
-// IIR filters are biquads, to 2 stages -> 4th order
+// IIR filters for gravity estimation are biquads, so 2 stages -> 4th order
 #define ACCELGYRO_GRAVITY_FILTER_STAGES 2
 #define ACCELGYRO_GRAVITY_FILTER_COEFFICIENTS (ACCELGYRO_GRAVITY_FILTER_STAGES*6)
-#define ACCELGYRO_GRAVITY_FILTER_STATES (ACCELGYRO_GRAVITY_FILTER_STAGES*3*4)
+#define ACCELGYRO_GRAVITY_FILTER_STATES (ACCELGYRO_GRAVITY_FILTER_STAGES*4)
+
+#ifndef ACCELGYRO_FFT_LENGTH
+#define ACCELGYRO_FFT_LENGTH 64
+#endif
+#define ACCELGYRO_FFT_TABLE_LENGTH (ACCELGYRO_FFT_LENGTH/2)
 
 
 enum accelgyro_feature {
@@ -39,13 +45,33 @@ struct accelgyro_preprocessor {
     // Coefficients are shared, same for X,Y,Z
     EmlIIR gravity_filters[3];
     float gravity_coefficients[ACCELGYRO_GRAVITY_FILTER_COEFFICIENTS];
-    float gravity_states[ACCELGYRO_GRAVITY_FILTER_STATES];
+    float gravity_states[3*ACCELGYRO_GRAVITY_FILTER_STATES];
     bool gravity_filter_enable;
+
+    // FFT for frequency-domain feature extraction
+    EmlFFT fft;
+    int fft_length;
+    // the range of FFT bins to output as features
+    int fft_feature_start;
+    int fft_feature_end;
+    // pre-computed table of coefficients
+    float fft_sin[ACCELGYRO_FFT_TABLE_LENGTH];
+    float fft_cos[ACCELGYRO_FFT_TABLE_LENGTH];
+    // FFT data buffers
+    float fft_real[ACCELGYRO_FFT_LENGTH];
+    float fft_imag[ACCELGYRO_FFT_LENGTH];
 };
 
 int
-accelgyro_preprocessor_init(struct accelgyro_preprocessor *self)
+accelgyro_preprocessor_init(struct accelgyro_preprocessor *self, int window_length)
 {
+    const int fft_length = ACCELGYRO_FFT_LENGTH;
+    if (fft_length != 0 && window_length >= fft_length) {
+        return -1;
+    }
+    self->fft_length = fft_length;
+
+
     self->frames_processed = 0;
 
     // Gravity separation
@@ -54,7 +80,7 @@ accelgyro_preprocessor_init(struct accelgyro_preprocessor *self)
     for (int i=0; i<3; i++) {
         self->gravity_filters[i] = (EmlIIR){
             ACCELGYRO_GRAVITY_FILTER_STAGES,
-            self->gravity_states + i * ACCELGYRO_GRAVITY_FILTER_STATES,
+            self->gravity_states + (i * ACCELGYRO_GRAVITY_FILTER_STATES),
             ACCELGYRO_GRAVITY_FILTER_STATES,
             self->gravity_coefficients + i*ACCELGYRO_GRAVITY_FILTER_COEFFICIENTS,
             ACCELGYRO_GRAVITY_FILTER_COEFFICIENTS,
@@ -62,17 +88,32 @@ accelgyro_preprocessor_init(struct accelgyro_preprocessor *self)
 
         const EmlError filter_err = eml_iir_check(self->gravity_filters[i]);
         if (filter_err != EmlOk) {
-            return -1;
+            return -2;
         }
 
     }
-    for (int i=0; i<ACCELGYRO_GRAVITY_FILTER_STATES; i++) {
+    for (int i=0; i<3*ACCELGYRO_GRAVITY_FILTER_STATES; i++) {
         self->gravity_states[i] = 0.0f;
     }
+
+    // FFT
+    self->fft = (EmlFFT){ ACCELGYRO_FFT_TABLE_LENGTH, self->fft_sin, self->fft_cos };
+    const EmlError fill_err = eml_fft_fill(self->fft, self->fft_length);
+    if (fill_err != EmlOk) {
+        return -3;
+    }
+    // Fill with zeros. Especially important since our window_length might be < fft_length
+    for (int i=0; i<fft_length; i++) {
+        self->fft_real[i] = 0.0f;
+        self->fft_imag[i] = 0.0f;
+    }
+    self->fft_feature_start = 0;
+    self->fft_feature_end = self->fft_length;
 
     return 0;
 }
 
+// Configure the lowpass filter used to estimate gravity
 // coeff must be for a 4th-order IIR filter, on EmlIIR format
 int
 accelgyro_preprocessor_set_gravity_lowpass(struct accelgyro_preprocessor *self,
@@ -84,6 +125,27 @@ accelgyro_preprocessor_set_gravity_lowpass(struct accelgyro_preprocessor *self,
 
     memcpy(self->gravity_coefficients, coeff, n_coefficients*sizeof(float));
     self->gravity_filter_enable = true;
+
+    return 0;
+}
+
+// Configure which FFT bins should be included as features. Range: [start, end-1]
+int
+accelgyro_preprocessor_set_fft_features(struct accelgyro_preprocessor *self,
+        int start, int end)
+{
+    if (start < 0 || end < 0) {
+        return -1;
+    }
+    if (self->fft_length != 0 && end > self->fft_length) {
+        return -2;
+    }
+    if (self->fft_length != 0 && start > self->fft_length) {
+        return -3;
+    }
+    
+    self->fft_feature_start = start;
+    self->fft_feature_end = end;
 
     return 0;
 }
@@ -161,6 +223,13 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
         motion_y_squared += (motion_y*motion_y);
         motion_z_squared += (motion_z*motion_z);
 
+        // Prepare for FFT
+        if (self->fft_length != 0) {
+            self->fft_real[frame] = motion_mag;
+            self->fft_imag[frame] = 0.0f;
+        }
+
+        // Internal metric tracking
         self->frames_processed += 1;
     }
 
@@ -186,6 +255,22 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
     // Motion magnitude p2p
     const float motion_mag_p2p = motion_mag_max - motion_mag_min;
     features[accelgyro_feature_motion_mag_p2p] = motion_mag_p2p;
+
+    // Perform FFT
+    if (self->fft_length != 0) {
+
+        const EmlError fft_err = \
+            eml_fft_forward(self->fft, self->fft_real, self->fft_imag, self->fft_length);
+        if (fft_err != EmlOk) {
+            return -21;
+        }
+
+#if 0
+        fprintf(stderr, "fft-run nfft=%d window=%d\n",
+            self->fft_length, length/ACCELGYRO_INPUT_CHANNELS);
+#endif
+
+    }
 
     return 0;
 }

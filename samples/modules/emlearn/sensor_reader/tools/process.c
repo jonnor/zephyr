@@ -248,12 +248,24 @@ main(int argc, const char *argv[])
     struct accelgyro_preprocessor _preprocessor;
     struct accelgyro_preprocessor *preprocessor = &_preprocessor;
 
-    const int gravity_err = accelgyro_preprocessor_set_gravity_lowpass(preprocessor,
-        gravity_lowpass_values, gravity_lowpass_length);
-    if (gravity_err != 0) {
+    const int init_err = accelgyro_preprocessor_init(preprocessor, window_length);
+    if (init_err != 0) {
+        fprintf(stderr, "preprocess init error %d\n", init_err);
         return -2;
     }
 
+    const int gravity_err = accelgyro_preprocessor_set_gravity_lowpass(preprocessor,
+        gravity_lowpass_values, gravity_lowpass_length);
+    if (gravity_err != 0) {
+        fprintf(stderr, "lowpass config error %d\n", gravity_err);
+        return -2;
+    }
+
+    const int fft_config_err = accelgyro_preprocessor_set_fft_features(preprocessor, 1, 10);
+    if (fft_config_err != 0) {
+        fprintf(stderr, "FFT config error %d\n", fft_config_err);
+        return -2;
+    }
 
     // Setup model
     float model_predictions[MOTION_MODEL_CLASSES];
