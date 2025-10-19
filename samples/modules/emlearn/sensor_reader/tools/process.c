@@ -25,14 +25,15 @@ char *input_columns[INPUT_COLUMNS_MAX];
 float input_values[INPUT_COLUMNS_MAX];
 
 // Output format
-// WARNING: length of values must match
-#define OUTPUT_COLUMNS_LENGTH (accelgyro_features_length)
+// Add +1 because we also have time column
+#define OUTPUT_COLUMNS_LENGTH (accelgyro_features_length+1)
+// WARNING: length of items must match the number of features defined
 const char *output_columns[OUTPUT_COLUMNS_LENGTH] = {
     "time",
     "orientation_x",
     "orientation_y",
     "orientation_z",
-    "motion_mag_rms"
+    "motion_mag_rms",
     "motion_mag_p2p",
     "motion_x_rms",
     "motion_y_rms",
@@ -108,7 +109,7 @@ read_overlapped_windows(EmlCsvReader *reader,
     if (*read_index == window_length) {
         // previous execution hit a full window
         // prepare for new values coming in, by shifting existing data down
-        memcpy(buffer, buffer+(hop_length*out_columns), sizeof(float)*out_columns*window_length);
+        memmove(buffer, buffer+(hop_length*out_columns), sizeof(float)*out_columns*window_length);
         *read_index -= hop_length;
     }
 
