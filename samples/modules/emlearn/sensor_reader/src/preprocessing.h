@@ -326,7 +326,7 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
                 self->motion[i] = xyz[i] - self->gravity[i];
             }
         } else {
-
+            // No gravity filter. XXX: motion will be 0 in this case
             for (int i=0; i<3; i++) {
                 self->gravity[i] = xyz[i];
                 self->motion[i] = xyz[i] - self->gravity[i];
@@ -404,6 +404,12 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
         if (fft_err != EmlOk) {
             return -2;
         }
+
+        // Convert to magnitude
+        for (int i=0; i<self->fft_length; i++) {
+            self->fft_real[i] = fabs(self->fft_real[i]);
+        }
+
 #if 0
         fprintf(stderr, "fft-run nfft=%d window=%d\n",
             self->fft_length, length/ACCELGYRO_INPUT_CHANNELS);

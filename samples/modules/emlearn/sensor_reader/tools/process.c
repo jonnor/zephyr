@@ -176,7 +176,7 @@ main(int argc, const char *argv[])
     }
 
     const int window_length = 50; // FIXME: unhardcode
-    const int hop_length = 8; // FIXME: unhardcode
+    const int hop_length = 25; // FIXME: unhardcode
 
     // Setup file input
     FILE *read_file = fopen(input_path, "r");
