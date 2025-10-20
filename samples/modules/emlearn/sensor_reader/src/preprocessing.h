@@ -29,7 +29,22 @@ enum accelgyro_feature {
 };
 //#define ACCELGYRO_PREPROCESSOR_FEATURES 6
 
+const char *accelgyro_feature_names[accelgyro_features_length+1] = {
+    "orientation_x",
+    "orientation_y",
+    "orientation_z",
+    "motion_mag_rms",
+    "motion_mag_p2p",
+    "motion_x_rms",
+    "motion_y_rms",
+    "motion_z_rms",
+    "LENGTH_NOT_FEATURE"
+};
+
 struct accelgyro_preprocessor {
+
+    int samplerate;
+    int window_length;
 
     // output buffer
     float features[accelgyro_features_length];
@@ -63,7 +78,7 @@ struct accelgyro_preprocessor {
 };
 
 int
-accelgyro_preprocessor_init(struct accelgyro_preprocessor *self, int window_length)
+accelgyro_preprocessor_init(struct accelgyro_preprocessor *self, int samplerate, int window_length)
 {
     const int fft_length = ACCELGYRO_FFT_LENGTH;
     if (fft_length != 0 && window_length >= fft_length) {
@@ -71,6 +86,8 @@ accelgyro_preprocessor_init(struct accelgyro_preprocessor *self, int window_leng
     }
     self->fft_length = fft_length;
 
+    self->samplerate = samplerate;
+    self->window_length = window_length;
 
     self->frames_processed = 0;
 
@@ -109,6 +126,99 @@ accelgyro_preprocessor_init(struct accelgyro_preprocessor *self, int window_leng
     }
     self->fft_feature_start = 0;
     self->fft_feature_end = self->fft_length;
+
+    return 0;
+}
+
+int
+accelgyro_preprocessor_get_feature_length(struct accelgyro_preprocessor *self)
+{
+    const int fixed_features = accelgyro_features_length;
+    const int fft_features = self->fft_feature_end - self->fft_feature_start;
+    const int total_features = fixed_features + fft_features;
+
+    return total_features;
+}
+
+// On success, returns number of characters written (including the \0 byte)
+// On failure, returns a negative error code
+int
+accelgyro_preprocessor_get_feature_name(struct accelgyro_preprocessor *self,
+        int index, char *out, size_t length)
+{
+    const int n_features = accelgyro_preprocessor_get_feature_length(self);
+    if (n_features < 0) {
+        return -1;
+    }
+    if (index < 0) {
+        return -2;
+    }
+    if (index > n_features-1) {
+        return -2;
+    }
+
+    if (index < accelgyro_features_length) {
+        // regular fixed feature
+        const char * feature_name = accelgyro_feature_names[index];
+        const int needed = snprintf(out, length, "%s", feature_name);
+        if (needed < 0) {
+            // error
+            out[0] = '\0';
+            return -4;
+        } else if (needed >= length) {
+            // truncated
+            return -5;
+        } else {
+            // success
+            return needed+1;
+        }
+    } else {
+        // FFT feature
+
+        // Find the frequency for the FFT bin in question
+        const int fft_index = index - accelgyro_features_length;
+        const int fft_bin = fft_index + self->fft_feature_start;
+        const float freq = fft_bin * (self->samplerate/(float)self->fft_length);
+        float freq_integer;
+        float freq_frac = modff(fabsf(freq), &freq_integer);
+        int freq_first_decimal = (int)roundf(freq_frac * powf(10.0f, 1));
+
+        const int needed = snprintf(out, length, "fft_%d_%dhz",
+            (int)freq_integer, freq_first_decimal);
+        if (needed < 0) {
+            // error
+            out[0] = '\0';
+            return -6;
+        } else if (needed >= length) {
+            // truncated
+            return -7;
+        } else {
+            // success
+            return needed+1;
+        }
+    }
+
+    return -5;
+}
+
+int
+accelgyro_preprocessor_get_features(struct accelgyro_preprocessor *self, float *out, size_t length)
+{
+    const int n_features = accelgyro_preprocessor_get_feature_length(self);
+    if (n_features < 0) {
+        return -2;
+    }
+    if (length < n_features) {
+        return -1;
+    }
+
+    // Copy regular features
+    memcpy(out, self->features, accelgyro_features_length*sizeof(float));
+
+    // Copy FFT features
+    const float *fft_start = self->fft_real + self->fft_feature_start;
+    const int fft_items = self->fft_feature_end - self->fft_feature_start;
+    memcpy(out+accelgyro_features_length, fft_start, fft_items*sizeof(float));
 
     return 0;
 }
@@ -156,7 +266,13 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
                             const float *data,
                             int length)
 {
-    if ((length % ACCELGYRO_INPUT_CHANNELS) != 0) {
+    const int expect_length = self->window_length * ACCELGYRO_INPUT_CHANNELS;
+    if (length != expect_length) {
+        return -1;
+    }
+
+    if (self->samplerate <= 0) {
+        // Invalid samplerate. Not initialized?
         return -1;
     }
 
@@ -259,12 +375,19 @@ accelgyro_preprocessor_run(struct accelgyro_preprocessor *self,
     // Perform FFT
     if (self->fft_length != 0) {
 
+#if 0
+        printf("FFT [");
+        for (int i=0; i<self->fft_length; i++) {
+            printf("%.2f ", self->fft_real[i]);
+        }
+        printf("]\n");
+#endif
+
         const EmlError fft_err = \
             eml_fft_forward(self->fft, self->fft_real, self->fft_imag, self->fft_length);
         if (fft_err != EmlOk) {
-            return -21;
+            return -2;
         }
-
 #if 0
         fprintf(stderr, "fft-run nfft=%d window=%d\n",
             self->fft_length, length/ACCELGYRO_INPUT_CHANNELS);

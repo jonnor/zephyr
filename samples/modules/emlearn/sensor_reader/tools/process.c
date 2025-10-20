@@ -34,22 +34,12 @@ float input_values[INPUT_COLUMNS_MAX];
 
 // Output format
 // Add +1 because we also have time column
-#define OUTPUT_COLUMNS_LENGTH (accelgyro_features_length+1+MOTION_MODEL_CLASSES)
-// WARNING: length of items must match the number of features defined
-const char *output_columns[OUTPUT_COLUMNS_LENGTH] = {
-    "time",
-    "orientation_x",
-    "orientation_y",
-    "orientation_z",
-    "motion_mag_rms",
-    "motion_mag_p2p",
-    "motion_x_rms",
-    "motion_y_rms",
-    "motion_z_rms",
-    "class_0",
-    "class_1"
-};
+#define OUTPUT_COLUMNS_LENGTH (1+accelgyro_features_length+1+MOTION_MODEL_CLASSES+ACCELGYRO_FFT_LENGTH)
+const char *output_columns[OUTPUT_COLUMNS_LENGTH];
 float output_values[OUTPUT_COLUMNS_LENGTH];
+// Buffer to store dynamically computeds names. Output columns will point into this. A kind of string pool
+#define OUTPUT_COLUMNS_POOL_LENGTH (OUTPUT_COLUMNS_LENGTH*20)
+static char output_columns_pool[OUTPUT_COLUMNS_POOL_LENGTH];
 
 
 // Working buffers
@@ -217,27 +207,6 @@ main(int argc, const char *argv[])
         }
     }
 
-    // Setup file output
-    FILE *write_file = fopen(output_path, "w");
-    if (write_file == NULL) {
-        fprintf(stderr, "failed to open output\n");
-        return -1;
-    }
-
-    EmlCsvWriter _writer = {
-        .n_columns = OUTPUT_COLUMNS_LENGTH,
-        .write = eml_fileio_write,
-        .stream = write_file,
-    };
-    EmlCsvWriter *writer = &_writer;
-
-    // Write output header
-    const EmlError write_header_err = \
-        eml_csv_writer_write_header(writer, output_columns, OUTPUT_COLUMNS_LENGTH);
-    if (write_header_err != EmlOk) {
-        fprintf(stderr, "header-write-fail error=%d \n", write_header_err);
-        return -1;
-    }
 
     if (window_length > WINDOW_LENGTH_MAX) {
         return -2;
@@ -248,7 +217,7 @@ main(int argc, const char *argv[])
     struct accelgyro_preprocessor _preprocessor;
     struct accelgyro_preprocessor *preprocessor = &_preprocessor;
 
-    const int init_err = accelgyro_preprocessor_init(preprocessor, window_length);
+    const int init_err = accelgyro_preprocessor_init(preprocessor, samplerate, window_length);
     if (init_err != 0) {
         fprintf(stderr, "preprocess init error %d\n", init_err);
         return -2;
@@ -258,13 +227,89 @@ main(int argc, const char *argv[])
         gravity_lowpass_values, gravity_lowpass_length);
     if (gravity_err != 0) {
         fprintf(stderr, "lowpass config error %d\n", gravity_err);
-        return -2;
+        return 2;
     }
 
-    const int fft_config_err = accelgyro_preprocessor_set_fft_features(preprocessor, 1, 10);
+    const int fft_config_err = \
+        accelgyro_preprocessor_set_fft_features(preprocessor, 1, 10);
     if (fft_config_err != 0) {
         fprintf(stderr, "FFT config error %d\n", fft_config_err);
-        return -2;
+        return 2;
+    }
+
+    // Construct output column names
+    // these depend on the preprocessor configuration used, in particular FFT features enabled
+    const int n_features = accelgyro_preprocessor_get_feature_length(preprocessor);
+    if (n_features < 0) {
+        return 2;
+    }
+    const int output_columns_total = 1 + n_features + MOTION_MODEL_CLASSES; 
+    output_columns[0] = "time";
+
+    char *pool_item = output_columns_pool;
+    int pool_remaining = OUTPUT_COLUMNS_POOL_LENGTH;
+    for (int feature=0; feature<n_features; feature++) {
+
+        // FIXME: actually push forward inside the pool
+        const int name_length = accelgyro_preprocessor_get_feature_name(preprocessor, \
+            feature, pool_item, pool_remaining);
+        if (name_length <= 0) {
+            fprintf(stderr, "failed to get feature name %d \n", name_length);
+            return 7;
+        }
+
+        output_columns[1+feature] = pool_item;
+        pool_item += name_length;
+        pool_remaining -= name_length;
+
+        if (pool_remaining <= 0) {
+            return 11;
+        }
+    }
+
+    for (int class=0; class<MOTION_MODEL_CLASSES; class++) {
+
+        if (pool_remaining <= 0) {
+            return 12;
+        }
+        const int needed = snprintf(pool_item, pool_remaining, "class_%d", class);
+        if (needed < 0) {
+            // error
+            pool_item[0] = '\0';
+            return 9;
+        } else if (needed >= pool_remaining) {
+            // truncated
+            return 10;
+        } else {
+            // success
+            output_columns[1+n_features+class] = pool_item;
+            pool_item += (needed+1);
+            pool_remaining -= (needed+1);
+        }
+
+    }
+
+
+    // Setup file output
+    FILE *write_file = fopen(output_path, "w");
+    if (write_file == NULL) {
+        fprintf(stderr, "failed to open output\n");
+        return -1;
+    }
+
+    EmlCsvWriter _writer = {
+        .n_columns = output_columns_total,
+        .write = eml_fileio_write,
+        .stream = write_file,
+    };
+    EmlCsvWriter *writer = &_writer;
+
+    // Write output header
+    const EmlError write_header_err = \
+        eml_csv_writer_write_header(writer, output_columns, output_columns_total);
+    if (write_header_err != EmlOk) {
+        fprintf(stderr, "header-write-fail error=%d \n", write_header_err);
+        return -1;
     }
 
     // Setup model
@@ -302,8 +347,10 @@ main(int argc, const char *argv[])
             output_values[0] = window_no * hop_duration;
 
             // Provide extracted features as output
-            for (int i=0; i<accelgyro_features_length; i++) {
-                output_values[i+1] = preprocessor->features[i];
+            const int copy_err = \
+                accelgyro_preprocessor_get_features(preprocessor, output_values+1, OUTPUT_COLUMNS_LENGTH-1);
+            if (copy_err != 0) {
+                return -4;
             }
 
             // Run through classifier (if enabled)
@@ -317,12 +364,12 @@ main(int argc, const char *argv[])
 
             // Provide model predictions as output
             for (int i=0; i<MOTION_MODEL_CLASSES; i++) {
-                output_values[i+1+accelgyro_features_length] = model_predictions[i];
+                output_values[1+n_features+i] = model_predictions[i];
             }
 
             // Write output values to file
             const EmlError write_err = \
-                eml_csv_writer_write_data(writer, output_values, OUTPUT_COLUMNS_LENGTH);
+                eml_csv_writer_write_data(writer, output_values, output_columns_total);
             if (write_err != EmlOk) {
                 fprintf(stderr, "failed to write output\n");
                 return -3;

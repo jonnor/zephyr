@@ -1,6 +1,7 @@
 
 EMLEARN_INCLUDE_DIR := /home/jon/projects/emlearn/emlearn
 
+#CFLAGS := -g 
 CFLAGS := -g -fsanitize=address,undefined,leak -Wall -Werror -Wno-error=unused-function
 
 all: check
