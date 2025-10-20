@@ -1,9 +1,14 @@
 
 // from emlearn, for CSV reader/writer
+
+//#define EML_CSV_FLOAT_MAXSIZE 30
+
 #include <eml_csv.h>
 #include <eml_fileio.h>
 #include <stdlib.h>
 #include <errno.h>
+
+
 
 #include "preprocessing.h"
 #include "gravity_filter.h"
@@ -223,12 +228,14 @@ main(int argc, const char *argv[])
         return -2;
     }
 
+#if 1
     const int gravity_err = accelgyro_preprocessor_set_gravity_lowpass(preprocessor,
         gravity_lowpass_values, gravity_lowpass_length);
     if (gravity_err != 0) {
         fprintf(stderr, "lowpass config error %d\n", gravity_err);
         return 2;
     }
+#endif
 
     const int fft_config_err = \
         accelgyro_preprocessor_set_fft_features(preprocessor, 1, 10);
@@ -371,7 +378,7 @@ main(int argc, const char *argv[])
             const EmlError write_err = \
                 eml_csv_writer_write_data(writer, output_values, output_columns_total);
             if (write_err != EmlOk) {
-                fprintf(stderr, "failed to write output\n");
+                fprintf(stderr, "failed to write output %d \n", write_err);
                 return -3;
             }
 
