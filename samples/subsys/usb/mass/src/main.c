@@ -209,6 +209,40 @@ static void setup_disk(void)
 	return;
 }
 
+void read_text_file(void)
+{
+    FILE *file;
+    char buffer[256];
+
+    file = fopen("/NAND:/myfile2.txt", "r");
+    if (file == NULL) {
+        printk("File does not exist or cannot be opened\n");
+        return;
+    }
+
+    if (fgets(buffer, sizeof(buffer), file) != NULL) {
+        printk("Read: %s\n", buffer);
+    }
+
+    fclose(file);
+}
+
+void write_text_file(void)
+{
+    FILE *file;
+    const char *text = "Hello, Zephyr!\n";
+
+    file = fopen("/NAND:/myfile.txt", "w");
+    if (file == NULL) {
+        printk("Failed to open file for writing\n");
+        return;
+    }
+
+    fprintf(file, "%s", text);
+    
+    fclose(file);
+}
+
 int main(void)
 {
 	int ret;
@@ -226,5 +260,10 @@ int main(void)
 	}
 
 	LOG_INF("The device is put in USB mass storage mode.\n");
+
+    read_text_file();
+    write_text_file();
+    read_text_file();
+
 	return 0;
 }
